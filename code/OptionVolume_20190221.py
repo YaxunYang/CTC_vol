@@ -4,6 +4,7 @@
 # # Option Volume Data Processing
 
 import pandas as pd
+import numpy as np
 import re
 from datetime import datetime,timedelta
 
@@ -131,18 +132,19 @@ class OptionVolume(object):
         return tau_effect
         
     def concat_OptVolUnder_bytau(self, OptVol, Under, taus, data_columes, export2excel=False, excelname=None):
-        if isinstance(taus, int): taus = [taus]
-        if data_columes[0]=='OptVol': data_columes = data_columes[1:]
-        # col_generator = [(colname in Under, shift, colname in data_bytaus)]
+        if isinstance(taus, int): taus = np.array([taus]) 
+        else: taus = np.array(taus)[::-1]
+        if data_columes[0]!='OptVol': data_columes = ['OptVol']+data_columes
+        # col_generator = [('OptVol' or colname in Under, shift, colname in data_bytaus)]
         col_generator = [] 
         for data_colume in data_columes:
             x = re.split(r'\(|\)|,|;|\[|\]',data_colume)
             # check if data_columes is valid
-            if x[0] not in Under.columns: raise ValueError('%s not found in Under.colume' %x[0])
+            if x[0] not in Under.columns and x[0]!='OptVol': raise ValueError('%s not found in Under.colume' %x[0])
             if len(x) == 1:
                 col_generator += (x[0], 0, data_colume),
             else:
-                col_generator += [(x[0], int(shift), x[0]+'('+shift+')') for shift in x[1:-1]]
+                col_generator += [(x[0], int(shift), x[0]+'(%s)'%shift if int(shift) else x[0]) for shift in x[1:-1]]
 
         # inner join OptVol with Under on index
         OptVolUnder = pd.concat([OptVol,Under],axis=1,join='inner')
@@ -153,14 +155,17 @@ class OptionVolume(object):
         for OptTicker in self._chop_OptTickers_(OptVol.columns):
             expdate = OptTicker.split("_")[1]
             date_iloc = OptVolUnder.index.get_loc(expdate)
-
-            data_OptTicker = pd.DataFrame(index=[OptTicker+'_tau%d'%x for x in taus])
-            data_OptTicker['OptVol'] = OptVolUnder[OptTicker].iloc[[date_iloc-x for x in taus]].values
-            for colname_Under, shift, colname_Output in col_generator:
-                data_OptTicker[colname_Output] = OptVolUnder[colname_Under].iloc[[date_iloc-x-shift for x in taus]].values
+            idxs = date_iloc - taus
+            
+            data_OptTicker = pd.DataFrame(index=OptVolUnder.index[idxs]) # index : AsOfDate
+            data_OptTicker['OptTicker'] = OptTicker
+            data_OptTicker['Tau'] = taus
+            for colname, shift, colname_Output in col_generator:
+                if colname == 'OptVol': colname = OptTicker
+                data_OptTicker[colname_Output] = OptVolUnder[colname].iloc[idxs-shift].values
 
             data_bytaus += data_OptTicker,
-
+        
         data_bytaus = pd.concat(data_bytaus,axis=0) # concatenate dataframes
         
         if export2excel: self._export2excel_(data_bytaus, excelname)
